@@ -25,9 +25,10 @@ attach_reference.py (it can merge into the .eaf written here).
 EXAMPLE
   python asr_to_eaf.py recording.wav --lang xxx_Latn -o recording_asr.eaf
 
-Requires the omnilingual-asr package (Linux only: its fairseq2 backend has no
-Windows or macOS builds). Model weights are downloaded by fairseq2 on first use
-into $FAIRSEQ2_CACHE_DIR (default ~/.cache/fairseq2).
+Requires the omnilingual-asr package: Linux (its fairseq2 backend also has
+builds for macOS 14+ on Apple Silicon, but none for Windows; use WSL there).
+Model weights are downloaded by fairseq2 on first use into $FAIRSEQ2_CACHE_DIR
+(default ~/.cache/fairseq2/assets).
 """
 from __future__ import annotations
 
@@ -155,7 +156,7 @@ def load_pipeline(args):
         from omnilingual_asr.models.inference.pipeline import ASRInferencePipeline
     except ModuleNotFoundError:
         sys.exit("The omnilingual-asr package is not installed: pip install omnilingual-asr "
-                 "(Linux only; see README).")
+                 "(Linux; see README).")
     import torch
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     dtype = torch.bfloat16 if device.startswith("cuda") else torch.float32

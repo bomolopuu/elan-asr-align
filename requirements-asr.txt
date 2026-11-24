@@ -1,5 +1,6 @@
-# Part 1 (asr_to_eaf.py) + part 2 in one environment — Linux only
-# (fairseq2, the backend of omnilingual-asr, has no Windows or macOS builds).
+# Part 1 (asr_to_eaf.py) + part 2 in one environment — Linux
+# (fairseq2, the backend of omnilingual-asr, also has macOS 14+ Apple Silicon
+# builds, untested here; none for Windows — use WSL).
 # Versions tested: Python 3.12, Linux x86_64, CUDA 12.8 (and CPU).
 omnilingual-asr==0.2.0
 fairseq2==0.6

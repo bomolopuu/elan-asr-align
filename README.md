@@ -72,8 +72,9 @@ cd elan-asr-align
 pip install -r requirements-align.txt
 ```
 
-**Part 1, or both parts** (Linux only — `fairseq2`, the library under omniASR,
-has no Windows or macOS builds; on Windows use WSL):
+**Part 1, or both parts** (Linux; `fairseq2`, the library under omniASR, also
+has builds for macOS 14+ on Apple Silicon, untested here, but none for Windows
+or Intel Macs — on Windows use WSL):
 
 ```
 pip install -r requirements-asr.txt
@@ -96,7 +97,7 @@ read, `ffmpeg` must be on the `PATH`.
 
 | what | size | where | override with |
 |---|---|---|---|
-| omniASR model (part 1) | e.g. 6.1 GB for `omniASR_LLM_300M_v2`, 30 GB for `omniASR_LLM_7B_ZS` | `~/.cache/fairseq2` | `FAIRSEQ2_CACHE_DIR` |
+| omniASR model (part 1) | e.g. 6.1 GB for `omniASR_LLM_300M_v2`, 30 GB for `omniASR_LLM_7B_ZS` | `~/.cache/fairseq2/assets` | `FAIRSEQ2_CACHE_DIR` |
 | MMS_FA alignment model (part 2) | ~1.2 GB | `~/.cache/torch/hub` | `TORCH_HOME` |
 
 On clusters with a small `$HOME` quota, point both variables to a larger disk.
@@ -376,10 +377,10 @@ Measured on the 28.6-minute test recording and on its first 90 seconds:
 |---|---|---|
 | part 2, whole recording (28.6 min), transcription of 4 sentences | laptop CPU (16 threads) | 22 min |
 | part 2, `--search 0:60` | laptop CPU | 40 s – 2 min |
-| part 2, `--search 0:60` | GPU (NVIDIA L40S, shared) | TBD |
-| part 2, whole recording | GPU (NVIDIA L40S, shared) | TBD |
-| part 1, 90 s of audio, `omniASR_LLM_300M_v2` | GPU (NVIDIA L40S, shared) | TBD |
-| part 1, 90 s of audio, `omniASR_LLM_300M_v2` | cluster CPU (8 cores) | TBD |
+| part 2, whole recording | GPU (NVIDIA H100 NVL, shared) | 17 s |
+| part 2, 90 s of audio | GPU (NVIDIA H100 NVL, shared) | 5 s |
+| part 1, 90 s of audio (24 segments), `omniASR_LLM_300M_v2` | GPU (NVIDIA H100 NVL, shared) | 28 s |
+| part 1, 90 s of audio (24 segments), `omniASR_LLM_300M_v2` | cluster CPU (8 cores) | TBD |
 
 Times include loading the models; the weights were already downloaded.
 
