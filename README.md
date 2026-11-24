@@ -18,8 +18,8 @@ transcription often exists on paper, in Toolbox/FLEx or in an `.eaf` whose times
 were never aligned.
 
 > **Status.** Tested on one 28.6-minute folktale recording in Afade (Chadic),
-> and on parts of it, on a laptop CPU (Windows) and on a Linux cluster (CPU and
-> GPU). The boundaries it produces have **not been checked by ear**; see
+> and on parts of it, on a laptop CPU (Windows) and on a Linux cluster GPU.
+> The boundaries it produces have **not been checked by ear**; see
 > [Limitations](#limitations).
 
 ## Contents
@@ -380,9 +380,10 @@ Measured on the 28.6-minute test recording and on its first 90 seconds:
 | part 2, whole recording | GPU (NVIDIA H100 NVL, shared) | 17 s |
 | part 2, 90 s of audio | GPU (NVIDIA H100 NVL, shared) | 5 s |
 | part 1, 90 s of audio (24 segments), `omniASR_LLM_300M_v2` | GPU (NVIDIA H100 NVL, shared) | 28 s |
-| part 1, 90 s of audio (24 segments), `omniASR_LLM_300M_v2` | cluster CPU (8 cores) | TBD |
 
 Times include loading the models; the weights were already downloaded.
+Part 1 also runs on a CPU (checked on a cluster node, not timed), several
+times slower than on a GPU (the first batches took about ten times as long).
 
 ## Troubleshooting
 
