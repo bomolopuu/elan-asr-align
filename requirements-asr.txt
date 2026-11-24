@@ -1,0 +1,9 @@
+# Part 1 (asr_to_eaf.py) + part 2 in one environment — Linux only
+# (fairseq2, the backend of omnilingual-asr, has no Windows or macOS builds).
+# Versions tested: Python 3.12, Linux x86_64, CUDA 12.8 (and CPU).
+omnilingual-asr==0.2.0
+fairseq2==0.6
+torch==2.8.0
+torchaudio==2.8.0
+numpy==1.26.4
+soundfile==0.13.1

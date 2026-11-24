@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+# never commit recordings, annotations or local notes
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+*.mp4
+*.eaf
+*.eaf.*
+*.pfsx
+*.TextGrid
+*.tsv
+worklog.txt

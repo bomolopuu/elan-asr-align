@@ -1,0 +1,8 @@
+# Part 2 only (attach_reference.py) — runs on Windows, macOS and Linux, CPU or GPU.
+# Versions tested: Python 3.12, Windows 11, CPU.
+# forced_align and MMS_FA exist in torchaudio 2.1 and later; they are also present
+# in 2.8 (tested on Linux, see requirements-asr.txt), 2.9.x and 2.10.0.
+numpy==1.26.3
+soundfile==0.12.1
+torch==2.4.1
+torchaudio==2.4.1
