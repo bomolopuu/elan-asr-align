@@ -1,5 +1,9 @@
 # elan-asr-align
 
+**Author:** Tatiana Korol ([ORCID 0009-0005-6590-2624](https://orcid.org/0009-0005-6590-2624))
+· **License:** [CC BY-NC 4.0](LICENSE) — free for non-commercial use, with
+attribution ([how to credit](#licenses)).
+
 Two command-line tools for field linguists who work in [ELAN](https://archive.mpi.nl/tla/elan):
 
 1. **`asr_to_eaf.py`** — cut a recording into speech segments and transcribe
@@ -399,9 +403,16 @@ times slower than on a GPU (the first batches took about ten times as long).
 
 ## Licenses
 
-- **This code**: [Creative Commons Attribution-NonCommercial 4.0](LICENSE)
-  (CC BY-NC 4.0). You may use, share and adapt it for non-commercial purposes,
-  with attribution (see [Citation](#citation)).
+- **This code**: © 2026 Tatiana Korol,
+  [Creative Commons Attribution-NonCommercial 4.0](LICENSE) (CC BY-NC 4.0).
+  You may use, share and adapt it for **non-commercial** purposes only, and you
+  must **credit the author**, e.g.:
+
+  > Tatiana Korol, *elan-asr-align* (2026),
+  > https://github.com/bomolopuu/elan-asr-align, licensed under CC BY-NC 4.0.
+
+  In a publication, cite it as under [Citation](#citation). For commercial
+  use, ask the author for permission.
 - **MMS_FA weights** (downloaded by `torchaudio`, used by part 2): CC BY-NC 4.0,
   per the `torchaudio` documentation of the model.
 - **omniASR** (`omnilingual-asr`): code and model weights under Apache 2.0, per

@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# Copyright (c) 2026 Tatiana Korol. Part of elan-asr-align.
+# License: CC BY-NC 4.0 — non-commercial use only, with attribution (see LICENSE).
 """Shared helpers for asr_to_eaf.py and attach_reference.py: audio loading and
 the bits of ELAN .eaf bookkeeping both scripts need."""
 from __future__ import annotations

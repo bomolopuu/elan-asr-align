@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# Copyright (c) 2026 Tatiana Korol. Part of elan-asr-align.
+# License: CC BY-NC 4.0 — non-commercial use only, with attribution (see LICENSE).
 """
 vad_core.py — energy-based speech/pause detection for field recordings.
 

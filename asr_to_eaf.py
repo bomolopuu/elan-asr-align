@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# Copyright (c) 2026 Tatiana Korol. Part of elan-asr-align.
+# License: CC BY-NC 4.0 — non-commercial use only, with attribution (see LICENSE).
 """
 asr_to_eaf.py — cut a field recording into speech segments, transcribe every
 segment with an Omnilingual ASR model and write an ELAN .eaf: one annotation

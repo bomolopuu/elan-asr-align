@@ -1,3 +1,23 @@
+elan-asr-align
+Copyright (c) 2026 Tatiana Korol (ORCID 0009-0005-6590-2624)
+
+This work is licensed under the Creative Commons Attribution-NonCommercial
+4.0 International License (CC BY-NC 4.0), whose full text follows below.
+https://creativecommons.org/licenses/by-nc/4.0/
+
+In short: you may use, copy, modify and share this code for NON-COMMERCIAL
+purposes only, and you must give credit to the author, e.g.
+
+    Tatiana Korol, elan-asr-align (2026),
+    https://github.com/bomolopuu/elan-asr-align, licensed under CC BY-NC 4.0.
+
+For commercial use, ask the author for permission.
+
+The licenses of the models the code downloads (MMS_FA, omniASR) are separate;
+see README.md.
+
+=======================================================================
+
 Attribution-NonCommercial 4.0 International
 
 =======================================================================
