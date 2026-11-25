@@ -4,7 +4,7 @@
 · **License:** [CC BY-NC 4.0](LICENSE) — free for non-commercial use, with
 attribution ([how to credit](#licenses)).
 
-Two command-line tools for field linguists who work in [ELAN](https://archive.mpi.nl/tla/elan):
+Command-line tools for field linguists who work in [ELAN](https://archive.mpi.nl/tla/elan):
 
 1. **`asr_to_eaf.py`** — cut a recording into speech segments and transcribe
    every segment with Meta's multilingual
@@ -15,6 +15,10 @@ Two command-line tools for field linguists who work in [ELAN](https://archive.mp
    where each sentence is spoken, and write an `.eaf` in which all its tiers sit
    on the real time of the recording — optionally merged into the ASR `.eaf`
    from step 1.
+3. **`ocr_asr_to_eaf.py`** — the same for a handwritten page read by OCR:
+   compare the OCR text with the ASR text, find where the page is spoken, and
+   write one `.eaf` with the ASR draft, the OCR text, words and glosses on real
+   time, and the OCR↔ASR difference per sentence.
 
 They are meant for recordings of languages that have little or no ASR of their
 own, where a rough segmentation and a draft are a start, and where a checked
@@ -33,6 +37,7 @@ were never aligned.
 - [Quick start](#quick-start)
 - [Part 1: `asr_to_eaf.py`](#part-1-asr_to_eafpy)
 - [Part 2: `attach_reference.py`](#part-2-attach_referencepy)
+- [Part 3: `ocr_asr_to_eaf.py` (handwritten page + ASR)](#part-3-ocr_asr_to_eafpy-handwritten-page--asr)
 - [Alignment score and "weak words"](#alignment-score-and-weak-words)
 - [Limitations](#limitations)
 - [Speed](#speed)
@@ -53,6 +58,18 @@ transcription.eaf (or .txt) ──────────────┤
 
 Each part also works alone: part 1 without any transcription, part 2 without
 an ASR file (it then writes a new `.eaf` linked to the recording).
+
+**Part 3** (`ocr_asr_to_eaf.py`) is part 2 for a transcription that comes
+from a **handwritten page** read by OCR (a handwriting model, a chatbot, or
+typed): it compares the OCR text with the ASR text, finds from that where the
+page is spoken, and writes one `.eaf` with the ASR tier, the OCR sentences,
+words and glosses on real time, and the OCR↔ASR difference per sentence.
+
+```
+page scan ──► OCR ──► page_ocr.txt ─┐
+recording ──► asr_to_eaf.py ────────┼──► ocr_asr_to_eaf.py ──► recording_asr_ocr.eaf
+                                    │      ASR tier + Transcription / Ref / Words / Gloss / ASR match
+```
 
 The parts do not share segments. Part 1 cuts at pauses; part 2 keeps the
 sentences of *your* transcription and finds their own start and end times.
@@ -326,6 +343,106 @@ text to cover only part of the recording, it works on recordings of any length,
 and it carries over the dependent tiers. If you have a transcription, run part 1
 for the draft and segmentation (or skip it), then part 2.
 
+## Part 3: `ocr_asr_to_eaf.py` (handwritten page + ASR)
+
+```
+python ocr_asr_to_eaf.py AUDIO OCR --base ASR.eaf [-o OUT.eaf] [options]
+```
+
+For texts that exist on paper: written down by hand during fieldwork, with tone
+marks and an interlinear gloss line, then read by OCR. OCR gives the words and
+glosses but no times; ASR (part 1) gives times but a rough text. Part 3 puts
+them side by side on real time.
+
+**Input.** `OCR` can be
+
+- chatbot-style text, one block per sentence (labels from the numbers):
+
+  ```
+  1.
+  * Text: tàmú bé kɔ̀lɔ́ ŋwà sì
+  * Gloss: | man | with | wife | his | two |
+  ```
+
+  (`Texte:`/`Gloses:` and `Текст:`/`Глоссы:` are understood too);
+- a `.tsv` with columns `file`, `kind`, `text`, where `kind` is `text`, `gloss`
+  or `skip`: the format of the
+  [handwritten-interlinear-htr](https://github.com/bomolopuu/handwritten-interlinear-htr)
+  proofreading page and recogniser;
+- a plain `.txt`, one sentence per line (no glosses).
+
+`--base` is the ASR `.eaf`; its first top-level tier with text is used as the
+ASR text (or `--asr-tier`).
+
+**What it does.**
+
+1. **Compare.** Each OCR sentence and the whole ASR text are romanised the same
+   way as in part 2 (tones dropped, `ŋ→ng` …; spaces ignored, since ASR splits
+   words differently). For each sentence the closest stretch of the ASR text is
+   found by approximate substring search, and the character error rate (CER)
+   between the two is reported. No model is needed for this step:
+   `--compare-only` stops here.
+2. **Window.** The matches show where in the recording the page is spoken. Only
+   that part, plus `--pad` seconds on each side (default 10), is aligned. This
+   is much faster than searching the whole recording. If no sentence matches
+   better than `--max-cer` (default 60 %), the whole recording is searched;
+   `--search FROM:TO` sets the window by hand.
+3. **Align and merge** exactly as in part 2.
+
+**Output tiers** (next to the ASR tier, which is renamed `…_ASR` if it is
+called `Transcription`):
+
+| tier | parent | content |
+|---|---|---|
+| `Transcription` | — | the OCR sentence, on real time |
+| `Ref` | Transcription | sentence label (`1`, `2`, `2a` …) |
+| `Words` | Transcription | one annotation per word (symbolic subdivision) |
+| `Gloss` | Words | one gloss per word, when the gloss line has as many cells as the sentence has words |
+| `Gloss line` | Transcription | the whole gloss line, when the counts differ (a note is printed) |
+| `ASR match` | Transcription | `CER 23% · <the ASR text of that stretch>` |
+
+**Reading the report.** A sentence with a high CER *and* a low alignment score
+was probably not found: check by ear. A high CER with a good alignment score
+usually means ASR misheard, or OCR misread a letter. Compare the `ASR match`
+tier with the OCR text in ELAN; OCR errors in tone marks do not affect the
+alignment, because tones are dropped before aligning.
+
+**Example report** (made-up text):
+
+```
+OCR: 3 sentences, 14 words, 3 with glosses
+ASR: tier 'Transcription', 2210 words
+
+ref   ASR from       to   CER  OCR  /  ASR
+1     00:03.10 00:05.38   21%  tàmú bé kɔ̀lɔ́ ŋwà sì
+                             tamu be kolo ngwasi
+2     00:05.52 00:08.00   48%  ɓèlé nà túmɔ̀ kà pɛ̀ dí
+                             bele na tumu pe di
+3     00:08.65 00:10.15   12%  sì tàmú lóŋ
+                             si tamu long
+
+The page is spoken around 00:03.10–00:10.15 (by the ASR match); aligning in 0.0–20.2 s.
+
+ref      start      end align   CER  text
+1     00:03.12 00:05.40  0.71   21%  tàmú bé kɔ̀lɔ́ ŋwà sì
+2     00:05.40 00:08.05  0.24   48%  ɓèlé nà túmɔ̀ kà pɛ̀ dí  ← check
+3     00:08.61 00:10.20  0.66   12%  sì tàmú lóŋ
+ASR tier 'Transcription' renamed to 'Transcription_ASR'.
+Written: recording_asr_ocr.eaf
+```
+
+| option | default | |
+|---|---|---|
+| `--base` | (required) | the ASR `.eaf` |
+| `-o` | `<base>_ocr.eaf` | output file |
+| `--asr-tier` | first top-level tier | ASR tier in `--base` |
+| `--compare-only` | off | print the OCR↔ASR comparison and stop (no model) |
+| `--search FROM:TO` | from the ASR match | align only in this part, seconds |
+| `--pad` | 10 | seconds added around the ASR match |
+| `--max-cer` | 0.6 | worse matches than this do not set the window |
+| `--star-between` | off | allow audio between sentences that is not on the page |
+| `--min-pause-ms`, `--warn-score`, `--words-tsv`, `--device` | | as in part 2 |
+
 ## Alignment score and "weak words"
 
 The **score** of a sentence is the mean probability that the alignment model
@@ -381,6 +498,7 @@ Measured on the 28.6-minute test recording and on its first 90 seconds:
 |---|---|---|
 | part 2, whole recording (28.6 min), transcription of 4 sentences | laptop CPU (16 threads) | 22 min |
 | part 2, `--search 0:60` | laptop CPU | 40 s – 2 min |
+| part 3, OCR of a 4-sentence page, window found from the ASR match (29 s of audio) | laptop CPU | 30 s |
 | part 2, whole recording | GPU (NVIDIA H100 NVL, shared) | 17 s |
 | part 2, 90 s of audio | GPU (NVIDIA H100 NVL, shared) | 5 s |
 | part 1, 90 s of audio (24 segments), `omniASR_LLM_300M_v2` | GPU (NVIDIA H100 NVL, shared) | 28 s |
