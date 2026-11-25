@@ -16,9 +16,11 @@ Command-line tools for field linguists who work in [ELAN](https://archive.mpi.nl
    on the real time of the recording — optionally merged into the ASR `.eaf`
    from step 1.
 3. **`ocr_asr_to_eaf.py`** — the same for a handwritten page read by OCR:
-   compare the OCR text with the ASR text, find where the page is spoken, and
-   write one `.eaf` with the ASR draft, the OCR text, words and glosses on real
-   time, and the OCR↔ASR difference per sentence.
+   compare the OCR text with the ASR text (any ASR with times: `.eaf`, SRT/VTT,
+   a start/end/text table, Whisper JSON), find where the page is spoken, and
+   write one `.eaf` with the ASR draft, the OCR text, words and glosses, and
+   the OCR↔ASR difference per sentence. With the audio, the OCR text is
+   aligned to the recording; without it, it takes the times of the ASR.
 
 They are meant for recordings of languages that have little or no ASR of their
 own, where a rough segmentation and a draft are a start, and where a checked
@@ -92,6 +94,9 @@ cd elan-asr-align
 ```
 pip install -r requirements-align.txt
 ```
+
+Part 3 with audio needs the same. **Part 3 without audio** needs only numpy
+(`pip install numpy`) and runs anywhere.
 
 **Part 1, or both parts** (Linux; `fairseq2`, the library under omniASR, also
 has builds for macOS 14+ on Apple Silicon, untested here, but none for Windows
@@ -346,13 +351,25 @@ for the draft and segmentation (or skip it), then part 2.
 ## Part 3: `ocr_asr_to_eaf.py` (handwritten page + ASR)
 
 ```
-python ocr_asr_to_eaf.py AUDIO OCR --base ASR.eaf [-o OUT.eaf] [options]
+python ocr_asr_to_eaf.py AUDIO OCR --base ASR [-o OUT.eaf] [options]   # with audio
+python ocr_asr_to_eaf.py       OCR --base ASR [-o OUT.eaf] [options]   # without audio
 ```
 
 For texts that exist on paper: written down by hand during fieldwork, with tone
 marks and an interlinear gloss line, then read by OCR. OCR gives the words and
-glosses but no times; ASR (part 1) gives times but a rough text. Part 3 puts
-them side by side on real time.
+glosses but no times; ASR gives times but a rough text. Part 3 puts them side
+by side in one `.eaf`.
+
+**Two modes.**
+
+| | with audio | without audio |
+|---|---|---|
+| times of the OCR sentences | forced alignment to the recording (MMS_FA, as in part 2) | the time of the matching ASR stretch |
+| accuracy on the test page | a few hundredths of a second | ±0.3 s (segment times); better with word times |
+| needs | torch + torchaudio, the MMS_FA weights (~1.2 GB) | numpy only: no audio, no torch, no download |
+
+Without audio, `--media tale.wav` links a recording in the `.eaf` without
+reading it, so ELAN can play it.
 
 **Input.** `OCR` can be
 
@@ -371,8 +388,18 @@ them side by side on real time.
   proofreading page and recogniser;
 - a plain `.txt`, one sentence per line (no glosses).
 
-`--base` is the ASR `.eaf`; its first top-level tier with text is used as the
-ASR text (or `--asr-tier`).
+`--base` is the ASR **with times**, from part 1 or from any other ASR. The
+format is recognised by the content (`asr_formats.py`):
+
+| format | example |
+|---|---|
+| `.eaf` | ELAN; the first top-level tier with text, or `--asr-tier` |
+| `.srt`, `.vtt` | subtitles: `00:00:11,580 --> 00:00:13,770` then the text |
+| `.tsv` / `.txt` table | `start<TAB>end<TAB>text`, seconds (`11.58`) or `h:mm:ss.ms`; header row optional (`start`/`begin`, `end`/`stop`, `text`/`transcription`; `start_ms` = milliseconds); Audacity label files too |
+| `.json` | Whisper, faster-whisper, WhisperX (`"segments"` with `start`/`end`/`text`; word times in `"words"` are used when present), Hugging Face pipeline (`"chunks"` with `"timestamp"`) |
+
+A plain text file without times is refused with an explanation: without
+times the ASR cannot tell where anything is.
 
 **What it does.**
 
@@ -382,12 +409,18 @@ ASR text (or `--asr-tier`).
    found by approximate substring search, and the character error rate (CER)
    between the two is reported. No model is needed for this step:
    `--compare-only` stops here.
-2. **Window.** The matches show where in the recording the page is spoken. Only
-   that part, plus `--pad` seconds on each side (default 10), is aligned. This
-   is much faster than searching the whole recording. If no sentence matches
-   better than `--max-cer` (default 60 %), the whole recording is searched;
-   `--search FROM:TO` sets the window by hand.
-3. **Align and merge** exactly as in part 2.
+2. **With audio — window and alignment.** The matches show where in the
+   recording the page is spoken. Only that part, plus `--pad` seconds on each
+   side (default 10), is aligned. This is much faster than searching the
+   whole recording. If no sentence matches better than `--max-cer` (default
+   60 %), the whole recording is searched; `--search FROM:TO` sets the window
+   by hand. Alignment and merge then work exactly as in part 2.
+3. **Without audio — times from the match.** Each sentence takes the time of
+   its ASR stretch (letters spread evenly over the ASR segment, or over the
+   word when the ASR has word times). The page order is kept and overlaps are
+   split. A sentence that was not found (CER above `--max-cer`), or that
+   matched before the previous one, is put right after the previous sentence
+   and marked `not found?` in the `ASR match` tier.
 
 **Output tiers** (next to the ASR tier, which is renamed `…_ASR` if it is
 called `Transcription`):
@@ -433,15 +466,17 @@ Written: recording_asr_ocr.eaf
 
 | option | default | |
 |---|---|---|
-| `--base` | (required) | the ASR `.eaf` |
+| `--base` | (required) | the ASR with times: `.eaf`, `.srt`, `.vtt`, `.tsv`/`.txt`, `.json` |
 | `-o` | `<base>_ocr.eaf` | output file |
-| `--asr-tier` | first top-level tier | ASR tier in `--base` |
+| `--asr-tier` | first top-level tier | ASR tier, when `--base` is an `.eaf` |
 | `--compare-only` | off | print the OCR↔ASR comparison and stop (no model) |
-| `--search FROM:TO` | from the ASR match | align only in this part, seconds |
-| `--pad` | 10 | seconds added around the ASR match |
-| `--max-cer` | 0.6 | worse matches than this do not set the window |
-| `--star-between` | off | allow audio between sentences that is not on the page |
-| `--min-pause-ms`, `--warn-score`, `--words-tsv`, `--device` | | as in part 2 |
+| `--max-cer` | 0.6 | a match worse than this counts as "not found" |
+| `--no-audio` | off | use the ASR times even if the audio is given |
+| `--media FILE` | — | without audio: link this recording in the `.eaf` (it is not read) |
+| `--search FROM:TO` | from the ASR match | with audio: align only in this part, seconds |
+| `--pad` | 10 | with audio: seconds added around the ASR match |
+| `--star-between` | off | with audio: allow audio between sentences that is not on the page |
+| `--min-pause-ms`, `--warn-score`, `--words-tsv`, `--device` | | with audio: as in part 2 |
 
 ## Alignment score and "weak words"
 
@@ -499,6 +534,7 @@ Measured on the 28.6-minute test recording and on its first 90 seconds:
 | part 2, whole recording (28.6 min), transcription of 4 sentences | laptop CPU (16 threads) | 22 min |
 | part 2, `--search 0:60` | laptop CPU | 40 s – 2 min |
 | part 3, OCR of a 4-sentence page, window found from the ASR match (29 s of audio) | laptop CPU | 30 s |
+| part 3 without audio (times from the ASR match) | laptop CPU | under 1 s |
 | part 2, whole recording | GPU (NVIDIA H100 NVL, shared) | 17 s |
 | part 2, 90 s of audio | GPU (NVIDIA H100 NVL, shared) | 5 s |
 | part 1, 90 s of audio (24 segments), `omniASR_LLM_300M_v2` | GPU (NVIDIA H100 NVL, shared) | 28 s |

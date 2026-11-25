@@ -4,18 +4,27 @@
 # License: CC BY-NC 4.0 — non-commercial use only, with attribution (see LICENSE).
 """
 ocr_asr_to_eaf.py — compare what OCR read from a handwritten page with what ASR
-heard in the recording, and put both into one ELAN file on real time.
+heard in the recording, and put both into one ELAN file on time.
 
 Typical case: a fieldworker wrote down a text by hand, with tone marks and an
 interlinear gloss line under every line. The page has been read by OCR (a
 handwriting model, a chatbot, or typed by hand), and the recording has been
-transcribed by ASR (e.g. asr_to_eaf.py). OCR gives the right words and the
-glosses but no times; ASR gives times but a rough text. This script brings them
-together.
+transcribed by ASR. OCR gives the right words and the glosses but no times;
+ASR gives times but a rough text. This script brings them together.
+
+TWO MODES
+  with audio      python ocr_asr_to_eaf.py AUDIO OCR --base ASR
+                  The OCR text is force-aligned to the recording (MMS_FA, as in
+                  attach_reference.py): boundaries to a few hundredths of a second.
+                  Needs torch + torchaudio and the MMS_FA weights (~1.2 GB).
+  without audio   python ocr_asr_to_eaf.py OCR --base ASR
+                  Each OCR sentence gets the time of the ASR stretch it matches.
+                  Coarser (about ±0.5 s; better if the ASR has word times), but
+                  needs only numpy: no audio, no torch, no model download.
 
 INPUT
-  audio          the recording
-  ocr            the OCR result, in one of these forms:
+  AUDIO          the recording (wav / flac / mp3 …); optional, see above
+  OCR            the OCR result, in one of these forms:
                    * chatbot-style text, one block per sentence:
                          1.
                          * Text: tàmú bé kɔ̀lɔ́ …      (also "Texte:", "Текст:")
@@ -24,7 +33,15 @@ INPUT
                      text / gloss / skip (as written by handwritten-interlinear-htr:
                      proof_page.py / recognize.py)
                    * a plain .txt, one sentence per line, no glosses
-  --base EAF     the ASR .eaf (its first top-level tier is the ASR text)
+  --base ASR     the ASR result WITH TIMES, in any of these formats
+                 (recognised by content, see asr_formats.py):
+                   .eaf  ELAN (e.g. from asr_to_eaf.py)
+                   .srt / .vtt  subtitles
+                   .tsv / .txt  start<TAB>end<TAB>text (seconds or h:mm:ss; header optional)
+                   .json Whisper / faster-whisper / WhisperX ("segments", word
+                         times are used if present) or Hugging Face ("chunks")
+                 Plain text without times is refused: it cannot tell where
+                 anything is in the recording.
 
 HOW IT WORKS
   1. Compare. Every OCR sentence and the whole ASR text are romanised the same
@@ -34,29 +51,24 @@ HOW IT WORKS
      The report shows that stretch, its time and the character error rate (CER)
      between OCR and ASR. A high CER means: ASR misheard, OCR misread, or this
      sentence is not in the recording.
-  2. Window. The matches tell where in the recording the page is spoken. Unless
-     --search is given, only that part of the audio (plus --pad seconds) is
-     used in the next step, which makes it much faster than searching the
-     whole recording.
-  3. Align. The OCR text is force-aligned to the audio with MMS_FA, exactly as
-     in attach_reference.py (same romanisation, star token, pause snapping).
-  4. Write. One .eaf: the ASR tier(s) of --base, plus the OCR tiers on real time:
+  2a. With audio: only the part of the recording where the matches are (plus
+     --pad seconds) is aligned with MMS_FA — much faster than the whole file.
+  2b. Without audio: the sentence takes the time of its match. The page order
+     is kept and overlaps are removed; a sentence that was not found
+     (CER > --max-cer) is put after the previous one and marked "not found?".
+  3. Write one .eaf: the ASR tier, plus the OCR tiers:
          Transcription   OCR sentence                (time-aligned)
          Ref             sentence label: 1, 2, 2a …
          Words           one annotation per word     (symbolic subdivision)
          Gloss           one gloss per word          (when word and gloss counts agree)
          Gloss line      the whole gloss line        (when they do not agree)
          ASR match       "CER 23% · <ASR text of that stretch>"
-     The ASR tier is renamed to "<name>_ASR" if it is also called
-     "Transcription".
+     An ASR tier called "Transcription" is renamed "Transcription_ASR".
 
-EXAMPLE
-  python asr_to_eaf.py tale.wav --lang aal_Latn -o tale_asr.eaf
-  python ocr_asr_to_eaf.py tale.wav page1_ocr.txt --base tale_asr.eaf -o tale_ocr_asr.eaf
-
-The MMS_FA weights (~1.2 GB) are downloaded by torchaudio on first use into
-$TORCH_HOME (default ~/.cache/torch). The comparison (step 1) needs no model:
-with --compare-only the script stops after the report.
+EXAMPLES
+  python ocr_asr_to_eaf.py tale.wav page1.txt --base tale_asr.eaf -o tale_ocr.eaf
+  python ocr_asr_to_eaf.py page1.txt --base tale.srt -o tale_ocr.eaf --media tale.wav
+  python ocr_asr_to_eaf.py page1.txt --base tale_whisper.json --compare-only
 """
 from __future__ import annotations
 
@@ -70,11 +82,12 @@ from pathlib import Path
 
 import numpy as np
 
-from attach_reference import (_fmt, align, compute_emissions, load_model, merge, pick_sentence_tier,
-                              read_sentences, romanize, slot_values, snap_boundaries)
-from common import SR, load_audio, new_eaf_root, write_eaf
+from asr_formats import Segment, eaf_from_segments, read_asr
+from attach_reference import _fmt, merge, pick_sentence_tier, read_sentences, romanize
+from common import SR, new_eaf_root, set_media, write_eaf
 
 PUNCT = set(".,;:!?«»\"'()[]…-–—/")
+AUDIO_EXT = {".wav", ".flac", ".mp3", ".ogg", ".m4a", ".mp4", ".aac", ".opus", ".wma", ".aif", ".aiff"}
 
 
 # ───────────────────────────── OCR input ─────────────────────────────
@@ -89,6 +102,7 @@ class OcrSentence:
     t0: float = 0.0
     t1: float = 0.0
     asr_text: str = ""
+    unsure: bool = False
 
 
 def _clean(s: str) -> str:
@@ -149,43 +163,45 @@ def gloss_cells(gloss: str) -> list[str]:
 
 @dataclass
 class AsrStream:
-    """All ASR text romanised into one string, with the source of every letter."""
+    """All ASR text romanised into one string, with the time span of every letter."""
     chars: str = ""
-    times: list[float] = field(default_factory=list)      # estimated time of every letter
+    starts: list[float] = field(default_factory=list)
+    ends: list[float] = field(default_factory=list)
     word_ix: list[int] = field(default_factory=list)      # index into `words`
     words: list[str] = field(default_factory=list)
 
 
-def asr_stream(base: ET.Element, tier_id: str | None) -> tuple[AsrStream, str]:
-    tier = pick_sentence_tier(base, tier_id)
-    sv = slot_values(base)
+def asr_stream(segs: list[Segment]) -> AsrStream:
+    """Letters get times by spreading each timed piece evenly over its letters.
+    The pieces are the ASR words when the ASR gave word times, else its segments."""
     st = AsrStream()
     chars: list[str] = []
-    for a in tier.iter("ALIGNABLE_ANNOTATION"):
-        t1, t2 = sv.get(a.get("TIME_SLOT_REF1")), sv.get(a.get("TIME_SLOT_REF2"))
-        if t1 is None or t2 is None:
-            continue
-        romans = [(w, romanize(w)) for w in (a.findtext("ANNOTATION_VALUE") or "").split()]
-        n = sum(len(r) for _, r in romans) or 1
-        k = 0
-        for w, r in romans:
-            if not r:
+    for seg in segs:
+        pieces = seg.words or [(seg.start, seg.end, seg.text)]
+        for t1, t2, text in pieces:
+            romans = [(w, romanize(w)) for w in text.split()]
+            n = sum(len(r) for _, r in romans)
+            if not n:
                 continue
-            st.words.append(w)
-            for ch in r:
-                chars.append(ch)
-                st.times.append((t1 + (t2 - t1) * (k + 0.5) / n) / 1000)   # spread letters evenly
-                st.word_ix.append(len(st.words) - 1)
-                k += 1
+            k = 0
+            for w, r in romans:
+                if not r:
+                    continue
+                st.words.append(w)
+                for ch in r:
+                    chars.append(ch)
+                    st.starts.append(t1 + (t2 - t1) * k / n)
+                    st.ends.append(t1 + (t2 - t1) * (k + 1) / n)
+                    st.word_ix.append(len(st.words) - 1)
+                    k += 1
     st.chars = "".join(chars)
-    return st, tier.get("TIER_ID")
+    return st
 
 
 def best_substring(pattern: str, text: str) -> tuple[int, int, int]:
     """Approximate substring search: the stretch text[start:end] with the smallest
     edit distance to `pattern`. Returns (distance, start, end). O(len(pattern)·len(text))
     with numpy rows."""
-    m, n = len(pattern), len(text)
     t = np.frombuffer(text.encode("utf-32-le"), dtype=np.uint32)
 
     def last_row(p: str, tt: np.ndarray) -> np.ndarray:
@@ -216,9 +232,28 @@ def compare(sents: list[OcrSentence], st: AsrStream) -> None:
         dist, a, b = best_substring(p, st.chars)
         b = max(b, a + 1)
         s.cer = dist / len(p)
-        s.t0, s.t1 = st.times[a], st.times[b - 1]
+        s.t0, s.t1 = st.starts[a], st.ends[b - 1]
         w0, w1 = st.word_ix[a], st.word_ix[b - 1]
         s.asr_text = " ".join(st.words[w0:w1 + 1])
+
+
+def place_without_audio(sents: list[OcrSentence], max_cer: float, min_len: float = 0.3) -> None:
+    """Times from the ASR match only: keep the page order, no overlaps.
+    A sentence that was not found (CER above max_cer) or that matched before
+    the previous sentence is put right after the previous one and marked unsure."""
+    prev_end = 0.0
+    for i, s in enumerate(sents):
+        s.unsure = s.cer > max_cer or s.t1 <= prev_end
+        if s.unsure:
+            nxt = next((x.t0 for x in sents[i + 1:] if x.cer <= max_cer and x.t0 > prev_end), None)
+            s.t0 = prev_end
+            s.t1 = min(nxt, prev_end + 3.0) if nxt else prev_end + 3.0
+        elif s.t0 < prev_end:                    # slight overlap with the previous match: split it
+            mid = (s.t0 + prev_end) / 2
+            sents[i - 1].t1 = max(sents[i - 1].t0 + min_len / 2, mid)
+            s.t0 = sents[i - 1].t1
+        s.t1 = max(s.t1, s.t0 + min_len)
+        prev_end = s.t1
 
 
 # ─────────────────────── reference EAF from OCR ───────────────────────
@@ -236,7 +271,6 @@ def ocr_eaf(sents: list[OcrSentence]) -> tuple[ET.Element, list[str]]:
         if parent:
             attrs["PARENT_REF"] = parent
         tiers[tid] = ET.SubElement(root, "TIER", attrs)
-        return tiers[tid]
 
     # order matters: attach_reference takes sentence labels from the first short child tier
     tier("Transcription", "utterance")
@@ -289,7 +323,8 @@ def ocr_eaf(sents: list[OcrSentence]) -> tuple[ET.Element, list[str]]:
                 warnings.append(f"sentence {s.label}: {len(words)} words but {len(cells)} gloss cells "
                                 f"→ gloss kept as one line (tier 'Gloss line')")
         if s.asr_text:
-            ref_ann("ASR match", sid, f"CER {s.cer:.0%} · {s.asr_text}")
+            mark = "not found? " if s.unsure else ""
+            ref_ann("ASR match", sid, f"{mark}CER {s.cer:.0%} · {s.asr_text}")
 
     for lt_id, attrs in (
             ("utterance", {"TIME_ALIGNABLE": "true"}),
@@ -302,8 +337,7 @@ def ocr_eaf(sents: list[OcrSentence]) -> tuple[ET.Element, list[str]]:
     for stereo, desc in (("Symbolic_Subdivision", "Symbolic subdivision of a parent annotation."),
                          ("Symbolic_Association", "1-1 association with a parent annotation")):
         ET.SubElement(root, "CONSTRAINT", {"DESCRIPTION": desc, "STEREOTYPE": stereo})
-    hdr = root.find("HEADER")
-    ET.SubElement(hdr, "PROPERTY", {"NAME": "lastUsedAnnotationId"}).text = str(n)
+    ET.SubElement(root.find("HEADER"), "PROPERTY", {"NAME": "lastUsedAnnotationId"}).text = str(n)
 
     # drop tiers that stayed empty (e.g. no glosses at all)
     for tid, t in list(tiers.items()):
@@ -317,27 +351,33 @@ def ocr_eaf(sents: list[OcrSentence]) -> tuple[ET.Element, list[str]]:
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Compare an OCR transcription of a handwritten page with the ASR of the "
-                    "recording, align the OCR text to the audio and write one .eaf with both.",
+                    "recording and write one .eaf with both on time. With the audio, the OCR "
+                    "text is force-aligned; without it, it takes the times of the ASR match.",
         formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
-    ap.add_argument("audio", type=Path)
-    ap.add_argument("ocr", type=Path, help="OCR result: chatbot-style .txt, .tsv (file/kind/text) or plain .txt")
-    ap.add_argument("--base", type=Path, required=True, help="the ASR .eaf (e.g. from asr_to_eaf.py)")
+    ap.add_argument("inputs", nargs="+", metavar="[AUDIO] OCR",
+                    help="the recording (optional) and the OCR result")
+    ap.add_argument("--base", type=Path, required=True,
+                    help="ASR with times: .eaf, .srt, .vtt, .tsv/.txt (start, end, text) or Whisper .json")
     ap.add_argument("-o", "--output", type=Path, help="output .eaf (default: <base>_ocr.eaf)")
-    ap.add_argument("--asr-tier", help="ASR tier in --base (default: first top-level tier with text)")
+    ap.add_argument("--asr-tier", help="ASR tier, if --base is an .eaf (default: first top-level tier with text)")
+    ap.add_argument("--no-audio", action="store_true",
+                    help="do not align to the audio even if it is given; use the ASR times")
+    ap.add_argument("--media", type=Path,
+                    help="without audio: link this recording in the .eaf (it is not read)")
     ap.add_argument("--search", metavar="FROM:TO",
-                    help="align only in this part of the audio, seconds (default: found from the ASR match)")
+                    help="with audio: align only in this part, seconds (default: found from the ASR match)")
     ap.add_argument("--pad", type=float, default=10.0,
-                    help="seconds added around the ASR match before aligning (default 10)")
+                    help="with audio: seconds added around the ASR match before aligning (default 10)")
     ap.add_argument("--max-cer", type=float, default=0.6,
-                    help="if even the best OCR↔ASR matches are worse than this, search the whole audio")
+                    help="a match worse than this counts as 'not found' (default 0.6)")
     ap.add_argument("--compare-only", action="store_true", help="print the OCR↔ASR comparison and stop")
     ap.add_argument("--star-between", action="store_true",
-                    help="allow audio between sentences that is not on the page (repetitions, asides)")
+                    help="with audio: allow audio between sentences that is not on the page")
     ap.add_argument("--min-pause-ms", type=float, default=60.0)
     ap.add_argument("--warn-score", type=float, default=0.30,
-                    help="sentences with a lower alignment score are marked 'check'")
-    ap.add_argument("--words-tsv", type=Path, help="also write word times here")
-    ap.add_argument("--device", default=None, help="cuda / cpu (default: cuda if available)")
+                    help="with audio: sentences with a lower alignment score are marked 'check'")
+    ap.add_argument("--words-tsv", type=Path, help="with audio: also write word times here")
+    ap.add_argument("--device", default=None, help="with audio: cuda / cpu (default: cuda if available)")
     args = ap.parse_args()
     for stream in (sys.stdout, sys.stderr):
         try:
@@ -345,75 +385,111 @@ def main() -> int:
         except Exception:
             pass
 
+    if len(args.inputs) == 1:
+        audio_path, ocr_path = None, Path(args.inputs[0])
+    elif len(args.inputs) == 2:
+        audio_path, ocr_path = Path(args.inputs[0]), Path(args.inputs[1])
+    else:
+        ap.error("give either OCR, or AUDIO and OCR")
+    if audio_path and audio_path.suffix.lower() not in AUDIO_EXT and ocr_path.suffix.lower() in AUDIO_EXT:
+        audio_path, ocr_path = ocr_path, audio_path          # given in the other order
+    if not ocr_path.exists():
+        sys.exit(f"OCR file not found: {ocr_path}")
+    if args.no_audio:
+        audio_path = None
+    if audio_path and not audio_path.exists():
+        sys.exit(f"Audio file not found: {audio_path} (to work without audio, leave it out)")
+
     # 1. OCR
-    sents = [s for s in read_ocr(args.ocr) if words_of(s.text)]
+    sents = [s for s in read_ocr(ocr_path) if words_of(s.text)]
     if not sents:
-        sys.exit(f"No sentences found in {args.ocr}.")
+        sys.exit(f"No sentences found in {ocr_path}.")
     print(f"OCR: {len(sents)} sentences, {sum(len(words_of(s.text)) for s in sents)} words, "
           f"{sum(1 for s in sents if s.gloss)} with glosses", file=sys.stderr)
 
-    # 2. compare with ASR
-    base = ET.parse(args.base).getroot()
-    st, asr_tier = asr_stream(base, args.asr_tier)
-    print(f"ASR: tier {asr_tier!r}, {len(st.words)} words", file=sys.stderr)
+    # 2. ASR (any format with times) and the comparison
+    base, segs = read_asr(args.base, args.asr_tier)
+    st = asr_stream(segs)
+    has_words = any(s.words for s in segs)
+    print(f"ASR: {args.base.name}, {len(segs)} segments, {len(st.words)} words"
+          f"{' (with word times)' if has_words else ''}", file=sys.stderr)
     compare(sents, st)
     print(f"\n{'ref':<5} {'ASR from':>8} {'to':>8} {'CER':>5}  OCR  /  ASR", file=sys.stderr)
     for s in sents:
-        print(f"{s.label:<5} {_fmt(s.t0):>8} {_fmt(s.t1):>8} {s.cer:5.0%}  {s.text}", file=sys.stderr)
+        flag = "  ← not found?" if s.cer > args.max_cer else ""
+        print(f"{s.label:<5} {_fmt(s.t0):>8} {_fmt(s.t1):>8} {s.cer:5.0%}  {s.text}{flag}", file=sys.stderr)
         print(f"{'':<29}{s.asr_text}", file=sys.stderr)
-    good = [s for s in sents if s.cer <= args.max_cer]
     if args.compare_only:
         return 0
 
-    # 3. which part of the audio to align in
-    audio = load_audio(args.audio)
-    dur = len(audio) / SR
-    if args.search:
-        a, b = args.search.split(":")
-        t0, t1 = float(a or 0), min(dur, float(b) if b else dur)
-    elif good:
-        t0 = max(0.0, min(s.t0 for s in good) - args.pad)
-        t1 = min(dur, max(s.t1 for s in good) + args.pad)
-        print(f"\nThe page is spoken around {_fmt(t0 + args.pad)}–{_fmt(t1 - args.pad)} "
-              f"(by the ASR match); aligning in {t0:.1f}–{t1:.1f} s.", file=sys.stderr)
-    else:
-        t0, t1 = 0.0, dur
-        print(f"\nNo sentence matches the ASR better than CER {args.max_cer:.0%}: "
-              f"searching the whole recording ({dur:.0f} s).", file=sys.stderr)
+    if base is None:                                   # SRT / VTT / TSV / JSON → an ASR tier
+        base = eaf_from_segments(segs, "ASR")
+    out = args.output or args.base.with_name(args.base.stem + "_ocr.eaf")
+    media = audio_path or args.media
+    if media and base.find("HEADER/MEDIA_DESCRIPTOR") is None:
+        set_media(base, media, out)
 
-    # 4. OCR → reference EAF → forced alignment (attach_reference)
-    ref, warnings = ocr_eaf(sents)
+    # 3. times for the OCR sentences
+    ref, warnings = ocr_eaf(sents)                     # ASR-match tier is filled after placing (below)
+    sent_tier = pick_sentence_tier(ref, "Transcription")
+    asents = read_sentences(ref, sent_tier)           # same order and number as `sents`
+
+    if audio_path is None:
+        place_without_audio(sents, args.max_cer)
+        ref, warnings = ocr_eaf(sents)                 # rebuild: "not found?" marks are known now
+        asents = read_sentences(ref, pick_sentence_tier(ref, "Transcription"))
+        for a, s in zip(asents, sents):
+            a.start, a.end = s.t0, s.t1
+        print(f"\nNo audio: sentences take the times of their ASR match "
+              f"({'word' if has_words else 'segment'} times, letters spread evenly).", file=sys.stderr)
+        print(f"\n{'ref':<5} {'start':>8} {'end':>8} {'CER':>5}  text", file=sys.stderr)
+        for s in sents:
+            flag = "  ← not found, placed after the previous sentence" if s.unsure else ""
+            txt = s.text if len(s.text) <= 55 else s.text[:52] + "…"
+            print(f"{s.label:<5} {_fmt(s.t0):>8} {_fmt(s.t1):>8} {s.cer:5.0%}  {txt}{flag}", file=sys.stderr)
+    else:
+        from attach_reference import align, compute_emissions, load_model, snap_boundaries
+        from common import load_audio
+        audio = load_audio(audio_path)
+        dur = len(audio) / SR
+        good = [s for s in sents if s.cer <= args.max_cer]
+        if args.search:
+            a, b = args.search.split(":")
+            t0, t1 = float(a or 0), min(dur, float(b) if b else dur)
+        elif good:
+            t0 = max(0.0, min(s.t0 for s in good) - args.pad)
+            t1 = min(dur, max(s.t1 for s in good) + args.pad)
+            print(f"\nThe page is spoken around {_fmt(min(s.t0 for s in good))}–{_fmt(max(s.t1 for s in good))} "
+                  f"(by the ASR match); aligning in {t0:.1f}–{t1:.1f} s.", file=sys.stderr)
+        else:
+            t0, t1 = 0.0, dur
+            print(f"\nNo sentence matches the ASR better than CER {args.max_cer:.0%}: "
+                  f"searching the whole recording ({dur:.0f} s).", file=sys.stderr)
+        import torch
+        device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
+        model, d = load_model(device)
+        em = compute_emissions(audio[int(t0 * SR):int(t1 * SR)], model, device)
+        del model
+        align(em, asents, d, t0, args.star_between)
+        snap_boundaries(audio, asents, min_pause_ms=args.min_pause_ms)
+        print(f"\n{'ref':<5} {'start':>8} {'end':>8} {'align':>5} {'CER':>5}  text", file=sys.stderr)
+        for a, s in zip(asents, sents):
+            flag = "  ← check" if a.score < args.warn_score else ""
+            txt = a.text if len(a.text) <= 55 else a.text[:52] + "…"
+            print(f"{a.label:<5} {_fmt(a.start):>8} {_fmt(a.end):>8} {a.score:5.2f} "
+                  f"{s.cer:5.0%}  {txt}{flag}", file=sys.stderr)
+
     for w in warnings:
         print(f"note: {w}", file=sys.stderr)
-    sent_tier = pick_sentence_tier(ref, "Transcription")
-    asents = read_sentences(ref, sent_tier)
 
-    import torch
-    device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
-    model, d = load_model(device)
-    em = compute_emissions(audio[int(t0 * SR):int(t1 * SR)], model, device)
-    del model
-    align(em, asents, d, t0, args.star_between)
-    snap_boundaries(audio, asents, min_pause_ms=args.min_pause_ms)
-
-    by_label = {s.label: s for s in sents}
-    print(f"\n{'ref':<5} {'start':>8} {'end':>8} {'align':>5} {'CER':>5}  text", file=sys.stderr)
-    for s in asents:
-        o = by_label.get(s.label)
-        flag = "  ← check" if s.score < args.warn_score else ""
-        txt = s.text if len(s.text) <= 55 else s.text[:52] + "…"
-        print(f"{s.label:<5} {_fmt(s.start):>8} {_fmt(s.end):>8} {s.score:5.2f} "
-              f"{(o.cer if o else 1):5.0%}  {txt}{flag}", file=sys.stderr)
-
-    # 5. write
-    out = args.output or args.base.with_name(args.base.stem + "_ocr.eaf")
+    # 4. write
     renamed = merge(base, ref, "Transcription", asents, "_ASR")
     write_eaf(base, out)
     for old, new in renamed.items():
         print(f"ASR tier {old!r} renamed to {new!r}.", file=sys.stderr)
     print(f"Written: {out}", file=sys.stderr)
 
-    if args.words_tsv:
+    if args.words_tsv and audio_path is not None:
         with open(args.words_tsv, "w", encoding="utf-8") as f:
             f.write("sentence\tword\tstart\tend\tscore\n")
             for s in asents:
