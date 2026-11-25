@@ -18,8 +18,8 @@ INPUT
   ocr            the OCR result, in one of these forms:
                    * chatbot-style text, one block per sentence:
                          1.
-                         * Text: bə̀lò gó …          (also "Texte:", "Текст:")
-                         * Gloss: | homme | avec | … (also "Gloses:", "Глоссы:")
+                         * Text: tàmú bé kɔ̀lɔ́ …      (also "Texte:", "Текст:")
+                         * Gloss: | man | with | …   (also "Gloses:", "Глоссы:")
                    * a .tsv with columns file, kind, text, where kind is
                      text / gloss / skip (as written by handwritten-interlinear-htr:
                      proof_page.py / recognize.py)
